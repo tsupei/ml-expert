@@ -1,0 +1,64 @@
+---
+title: "KV Cache"
+description: "Caching Key and Value tensors to avoid redundant projections during autoregressive decoding."
+pubDate: 2026-10-03
+tags: ["LLM", "Inference", "KV-Cache"]
+draft: false
+author: "Tsu"
+lang: "en"
+translationId: "kv-cache"
+---
+
+## TL;DR
+
+Avoid redundant recomputation of Keys and Values during token-by-token autoregressive generation.
+
+```
+Summary:
+- To generate token n_k, we need the Keys and Values of tokens n_1...n_k, and only the Query of n_k.
+- The Keys and Values of tokens n_1...n_{k-1} were already computed during previous steps, so they can be cached.
+- Once previous Keys and Values are stored in memory, older tokens do not need to pass through previous layers again.
+- KV cache stores Key and Value tensors for every attention layer across the model.
+```
+
+The memory footprint for 16-bit floating point precision (FP16/BF16) is:
+
+$$
+\text{Memory (bytes)} = 2 \times b \times l \times h \times d_k \times s \times 2
+$$
+
+Parameters:
+- The first factor of 2 accounts for storing both Keys and Values.
+- $b$: batch size
+- $l$: number of layers
+- $h$: number of attention heads (in Multi-Head Attention)
+- $d_k$: dimension per head
+- $s$: sequence length (context tokens + generated tokens)
+- The trailing factor of 2 accounts for 2 bytes per float16 parameter.
+
+Example:
+For a model with 96 layers, 96 heads, head dimension of 128 ($h \times d_k = 12288$), batch size of 1, and sequence length of 2048:
+
+$$
+2 \times 1 \times 96 \times 12288 \times 2048 \times 2 \approx 9.66 \text{ GB}
+$$
+
+As sequence length $s$ or batch size $b$ scales up, KV cache quickly dominates GPU VRAM during inference.
+
+---
+
+## Concept
+
+In an autoregressive language model, text is generated sequentially one token at a time. To predict token $n_k$, the model relies on the causal attention mechanism over all preceding tokens $n_1 \dots n_{k-1}$ and the current token $n_k$.
+
+Because causal attention does not allow earlier tokens to attend to future tokens, the Key and Value representations of earlier tokens $n_1 \dots n_{k-1}$ remain strictly invariant once computed. Without caching, generating every new token requires re-projecting the entire historical sequence through all linear layers, turning generation complexity into quadratic operations $O(S^2)$. By storing past Key and Value activations in GPU memory, the model only computes the single Query, Key, and Value vector for the newest token $n_k$, reducing each decoding step to a matrix-vector dot product.
+
+---
+
+## Related Concepts
+
+Standard Multi-Head Attention (MHA) allocates independent Key and Value heads for every Query head, which leads to large memory requirements at scale. Several architectures optimize this trade-off:
+
+- **Multi-Query Attention (MQA)**: Shares a single Key and Value head across all Query heads, drastically reducing KV cache size with minor degradation in capacity.
+- **Grouped-Query Attention (GQA)**: A generalization between MHA and MQA (adopted by Llama 2/3), where multiple Query heads share a smaller group of Key and Value heads.
+- **Multi-Head Latent Attention (MLA)**: Introduced by DeepSeek, which compresses Keys and Values into a low-dimensional latent vector via low-rank projection before decoding, decompressing them on the fly to save cache memory.

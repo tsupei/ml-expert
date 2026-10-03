@@ -6,17 +6,15 @@ interface Props {
 const { currentLang = 'en' } = Astro.props;
 ---
 
-<footer class="mt-24 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/50 py-12 transition-colors">
-  <div class="mx-auto flex max-w-5xl flex-col items-center justify-between gap-4 px-6 sm:flex-row text-xs text-[var(--text-muted)]">
+<footer class="mt-20 border-t border-[var(--border)] py-8 transition-colors">
+  <div class="mx-auto flex max-w-[640px] items-center justify-between px-6 text-xs text-[var(--text-faint)]">
     <div>
-      © {new Date().getFullYear()} ML.EXPERT. {currentLang === 'en' ? 'Crafted for deep machine learning insights.' : '專注於深度的機器學習研究與工程實踐。'}
+      {currentLang === 'en' ? 'ML Notes & Systems' : '機器學習觀念與系統筆記'}
     </div>
-    <div class="flex items-center gap-4">
-      <a href="https://github.com/tsupei/ml-expert" target="_blank" rel="noopener noreferrer" class="hover:text-[var(--text-primary)] transition">
-        GitHub Repository
+    <div>
+      <a href="https://github.com/tsupei/ml-expert" target="_blank" rel="noopener noreferrer" class="hover:text-[var(--text-muted)] transition">
+        GitHub
       </a>
-      <span>•</span>
-      <span>Hosted on GitHub Pages</span>
     </div>
   </div>
 </footer>

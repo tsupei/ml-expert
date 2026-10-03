@@ -1,0 +1,64 @@
+---
+title: "KV Cache"
+description: "快取 Key 與 Value 張量，避免自回歸解碼過程中的重複投影運算。"
+pubDate: 2026-10-03
+tags: ["LLM", "Inference", "KV-Cache"]
+draft: false
+author: "Tsu"
+lang: "zh"
+translationId: "kv-cache"
+---
+
+## TL;DR
+
+避免在自回歸（Autoregressive）逐字生成時重複計算歷史 Token 的 Key 與 Value。
+
+```
+摘要：
+- 生成第 n_k 個 Token 時，模型需要 n_1...n_k 所有 Token 的 Key 與 Value，以及當前 Token n_k 的 Query。
+- 歷史 Token n_1...n_{k-1} 的 Key 與 Value 在先前的生成步驟中已計算完畢，因此可以直接快取在記憶體中。
+- 一旦快取了歷史的 Key 與 Value，先前的 Token 就不需要重複進入模型前向傳播。
+- KV cache 會快取 LLM 每一層注意力機制中的 Key 與 Value 張量。
+```
+
+對於 16-bit 浮點數（FP16 / BF16），KV Cache 的記憶體佔用公式如下：
+
+$$
+\text{Memory (bytes)} = 2 \times b \times l \times h \times d_k \times s \times 2
+$$
+
+參數說明：
+- 第一個 2 代表同時快取 Key 與 Value 兩個張量。
+- $b$：Batch size（批次大小）
+- $l$：模型的注意力層數（Number of layers）
+- $h$：注意力頭數量（Number of attention heads）
+- $d_k$：每個注意力頭的維度（Head dimension）
+- $s$：序列長度（Sequence length，包含輸入 Prompt 與已生成的 Token）
+- 最後的 2 代表每個 float16 浮點數佔用 2 個 Bytes。
+
+範例：
+以一個具備 96 層、96 個頭、頭維度 128（總隱藏維度 $h \times d_k = 12288$）、Batch size 為 1 且序列長度為 2048 的模型為例：
+
+$$
+2 \times 1 \times 96 \times 12288 \times 2048 \times 2 \approx 9.66 \text{ GB}
+$$
+
+隨著序列長度 $s$ 或 Batch size $b$ 增加，KV Cache 會迅速成為大模型推論時顯存（VRAM）的最大瓶頸。
+
+---
+
+## Concept
+
+在自回歸語言模型中，文字是逐個 Token 依序產生的。在預測第 $n_k$ 個 Token 時，模型依賴因果注意力（Causal Attention）計算當前 Token 與先前所有歷史 Token $n_1 \dots n_{k-1}$ 的關聯。
+
+由於因果遮罩機制不允許先前的 Token 關注未來資訊，歷史 Token $n_1 \dots n_{k-1}$ 計算出的 Key 與 Value 特徵向量在後續步驟中永遠保持不變。如果沒有快取機制，每生成一個新 Token 都必須將整段歷史序列重新送入所有線性層投影，導致生成複雜度隨長度呈二次方 $O(S^2)$ 增長。透過將歷史的 Key 與 Value 保留在顯存中，解碼每一步僅需計算新 Token $n_k$ 的 Query、Key 與 Value 向量，將運算簡化為單純的矩陣與向量點積。
+
+---
+
+## Related Concepts
+
+標準的 Multi-Head Attention (MHA) 為每個 Query 頭都分配獨立的 Key 與 Value 頭，在大規模併發或長文本推論時顯存開銷極大。後續的研究發展出多種優化架構：
+
+- **Multi-Query Attention (MQA)**：所有 Query 頭共享同一組 Key 和 Value 頭，大幅壓縮 KV Cache 體積，模型表現僅有微幅下降。
+- **Grouped-Query Attention (GQA)**：介於 MHA 與 MQA 之間的折衷折衷方案（如 Llama 2/3 所採用），將多個 Query 頭分組共享少數幾組 Key 和 Value 頭。
+- **Multi-Head Latent Attention (MLA)**：由 DeepSeek 提出，利用低秩矩陣（Low-rank projection）將 Key 與 Value 壓縮為低維度的 Latent 向量進行快取，解碼時再動態還原，大幅減輕顯存負擔。

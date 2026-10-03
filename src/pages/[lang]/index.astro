@@ -1,0 +1,121 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths() {
+  return [
+    { params: { lang: 'en' } },
+    { params: { lang: 'zh' } },
+  ];
+}
+
+const { lang } = Astro.params;
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+// Fetch posts for this language, sorted by pubDate descending
+const posts = (await getCollection('blog', ({ data }) => {
+  return data.lang === lang;
+})).sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+const t = {
+  en: {
+    heroBadge: 'Machine Learning Research',
+    heroTitle: 'ML Research & Systems Engineering',
+    heroSubtitle: 'Mathematical intuitions, model architectures, and implementation deep-dives.',
+    readPost: 'Read deep-dive',
+    publishedOn: 'Published',
+    noPosts: 'No posts published yet.',
+  },
+  zh: {
+    heroBadge: '機器學習深度研究',
+    heroTitle: 'ML 前沿研究與系統架構',
+    heroSubtitle: '深入剖析深度學習數學推導、模型架構與現代大規模工程實踐。',
+    readPost: '閱讀深度剖析',
+    publishedOn: '發布於',
+    noPosts: '尚無發布文章。',
+  },
+}[lang as 'en' | 'zh'];
+
+// Determine slug without the lang prefix for URL routing
+function getPostSlug(post: any) {
+  // e.g., "en/transformer-architecture" -> "transformer-architecture"
+  return post.id.replace(/^(en|zh)\//, '').replace(/\.(md|mdx)$/, '');
+}
+---
+
+<BaseLayout
+  title={t.heroTitle}
+  description={t.heroSubtitle}
+  lang={lang as 'en' | 'zh'}
+  alternateUrl={`${baseUrl}/${lang === 'en' ? 'zh' : 'en'}/`}
+>
+  <div class="mx-auto max-w-4xl px-6 py-16 md:py-24">
+    <!-- Hero Section -->
+    <div class="mb-16 border-b border-[var(--border-color)] pb-12">
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-color)] bg-[var(--bg-secondary)] px-3 py-1 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        <span class="h-1.5 w-1.5 rounded-full bg-[var(--accent)] animate-pulse"></span>
+        {t.heroBadge}
+      </span>
+      <h1 class="mt-4 text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl text-[var(--text-primary)]">
+        {t.heroTitle}
+      </h1>
+      <p class="mt-4 text-lg md:text-xl text-[var(--text-secondary)] font-normal max-w-2xl leading-relaxed">
+        {t.heroSubtitle}
+      </p>
+    </div>
+
+    <!-- Posts Feed -->
+    <div class="space-y-12">
+      {posts.length === 0 ? (
+        <p class="text-[var(--text-muted)]">{t.noPosts}</p>
+      ) : (
+        posts.map((post) => {
+          const postSlug = getPostSlug(post);
+          const postUrl = `${baseUrl}/${lang}/posts/${postSlug}/`;
+          const formattedDate = post.data.pubDate.toLocaleDateString(
+            lang === 'zh' ? 'zh-TW' : 'en-US',
+            { year: 'numeric', month: 'short', day: 'numeric' }
+          );
+
+          return (
+            <article class="group relative flex flex-col items-start justify-between rounded-2xl border border-[var(--border-color)] bg-[var(--bg-surface)] p-6 md:p-8 transition-all duration-200 hover:border-[var(--accent)]/50 hover:shadow-lg hover:shadow-[var(--accent)]/5">
+              <div class="flex items-center gap-3 text-xs text-[var(--text-muted)] mb-3">
+                <time datetime={post.data.pubDate.toISOString()}>{formattedDate}</time>
+                <span>•</span>
+                <span>{post.data.author}</span>
+                {post.data.draft && (
+                  <span class="rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 text-xs font-medium">
+                    Draft (草稿)
+                  </span>
+                )}
+              </div>
+
+              <h2 class="text-2xl font-bold tracking-tight text-[var(--text-primary)] group-hover:text-[var(--accent)] transition">
+                <a href={postUrl}>
+                  <span class="absolute inset-0"></span>
+                  {post.data.title}
+                </a>
+              </h2>
+
+              <p class="mt-3 text-base text-[var(--text-secondary)] leading-relaxed">
+                {post.data.description}
+              </p>
+
+              <div class="mt-6 flex flex-wrap items-center gap-2">
+                {post.data.tags.map((tag: string) => (
+                  <span class="rounded-full bg-[var(--bg-secondary)] border border-[var(--border-color)] px-2.5 py-0.5 text-xs text-[var(--text-muted)]">
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+
+              <div class="mt-6 flex items-center text-xs font-semibold text-[var(--accent)] group-hover:translate-x-1 transition-transform">
+                {t.readPost} →
+              </div>
+            </article>
+          );
+        })
+      )}
+    </div>
+  </div>
+</BaseLayout>

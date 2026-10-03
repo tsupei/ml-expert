@@ -1,0 +1,22 @@
+---
+interface Props {
+  currentLang?: 'en' | 'zh';
+}
+
+const { currentLang = 'en' } = Astro.props;
+---
+
+<footer class="mt-24 border-t border-[var(--border-color)] bg-[var(--bg-secondary)]/50 py-12 transition-colors">
+  <div class="mx-auto flex max-w-5xl flex-col items-center justify-between gap-4 px-6 sm:flex-row text-xs text-[var(--text-muted)]">
+    <div>
+      © {new Date().getFullYear()} ML.EXPERT. {currentLang === 'en' ? 'Crafted for deep machine learning insights.' : '專注於深度的機器學習研究與工程實踐。'}
+    </div>
+    <div class="flex items-center gap-4">
+      <a href="https://github.com/tsupei/ml-expert" target="_blank" rel="noopener noreferrer" class="hover:text-[var(--text-primary)] transition">
+        GitHub Repository
+      </a>
+      <span>•</span>
+      <span>Hosted on GitHub Pages</span>
+    </div>
+  </div>
+</footer>

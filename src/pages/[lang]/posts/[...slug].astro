@@ -1,0 +1,61 @@
+---
+import { getCollection, render } from 'astro:content';
+import PostLayout from '../../../layouts/PostLayout.astro';
+import Figure from '../../../components/Figure.astro';
+import Callout from '../../../components/Callout.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+
+  function getCleanSlug(post: any) {
+    return post.id.replace(/^(en|zh)\//, '').replace(/\.(md|mdx)$/, '');
+  }
+
+  return posts.map((post) => {
+    const cleanSlug = getCleanSlug(post);
+
+    // Find the alternate language post with matching translationId
+    const altPost = posts.find(
+      (p) => p.data.translationId === post.data.translationId && p.data.lang !== post.data.lang
+    );
+
+    return {
+      params: {
+        lang: post.data.lang,
+        slug: cleanSlug,
+      },
+      props: {
+        post,
+        alternatePost: altPost,
+      },
+    };
+  });
+}
+
+const { post, alternatePost } = Astro.props;
+const { Content } = await render(post);
+
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+function getCleanSlug(p: any) {
+  return p.id.replace(/^(en|zh)\//, '').replace(/\.(md|mdx)$/, '');
+}
+
+const alternateUrl = alternatePost
+  ? `${baseUrl}/${alternatePost.data.lang}/posts/${getCleanSlug(alternatePost)}/`
+  : undefined;
+---
+
+<PostLayout
+  title={post.data.title}
+  description={post.data.description}
+  pubDate={post.data.pubDate}
+  updatedDate={post.data.updatedDate}
+  tags={post.data.tags}
+  lang={post.data.lang}
+  alternateUrl={alternateUrl}
+  heroImage={post.data.heroImage}
+  author={post.data.author}
+>
+  <Content components={{ Figure, Callout }} />
+</PostLayout>

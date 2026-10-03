@@ -1,0 +1,233 @@
+---
+title: "深入解構 Transformer：從縮放點積注意力到多頭機制"
+description: "全面剖析 Transformer 的數學直覺、方差膨脹與縮放因子推導、Multi-Head 幾何空間，以及現代 Pre-LN 架構的 PyTorch 實作。"
+pubDate: 2026-10-03
+tags: ["Transformer", "Deep Learning", "Attention", "Math", "PyTorch"]
+draft: false
+author: "Tsu"
+lang: "zh"
+translationId: "transformer-architecture-deep-dive"
+heroImage: "/ml-expert/images/posts/transformer/scaled-dot-product-attention.svg"
+---
+
+在 2017 年 Vaswani 等人提出論文 *《Attention Is All You Need》* 之前，序列建模（Sequence Modeling）的主流典範是循環神經網路（RNN、LSTM、GRU）。然而，RNN 天生具有順序依賴性——處理第 $t$ 個時間步時，必須等待第 $t-1$ 個時間步的隱藏狀態計算完成。這不僅導致**難以在現代 GPU 上高度平行化**，長序列中的梯度消失與資訊瓶頸亦極難克服。
+
+Transformer 徹底摒棄了循環結構，完全依賴**自注意力機制（Self-Attention）**，實現了全局任意兩個 Token 間的 $O(1)$ 路徑訊息交互，並在硬體上轉化為極致高效的矩陣乘法運算。
+
+---
+
+## 1. 核心機制：縮放點積注意力 (Scaled Dot-Product Attention)
+
+自注意力機制的本質是：**以 Query 與 Key 的相似度作為權重，對 Value 進行動態加權求和**。
+
+其經典數學表述如下：
+
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V
+$$
+
+其中：
+- $Q \in \mathbb{R}^{N \times d_k}$：Query 矩陣（表示各查詢點的特徵）
+- $K \in \mathbb{R}^{M \times d_k}$：Key 矩陣（表示被查詢特徵的鍵值）
+- $V \in \mathbb{R}^{M \times d_v}$：Value 矩陣（包含要被聚合的實際內容）
+- $d_k$：Key 與 Query 的維度（Projection Dimension）
+
+<Figure
+  src="/ml-expert/images/posts/transformer/scaled-dot-product-attention.svg"
+  alt="Scaled Dot-Product Attention Architecture Flow"
+  figureNumber="1"
+  caption="縮放點積注意力（Scaled Dot-Product Attention）的資料流架構。Q 與 K 經由矩陣乘法計算相似度得分，除以縮放因子後透過 Softmax 歸一化，最後與 V 矩陣相乘輸出。"
+/>
+
+---
+
+## 2. 深度數學推導：為什麼需要除以 $\sqrt{d_k}$？
+
+許多初學者會好奇：**點積就點積，為什麼硬要除以 $\sqrt{d_k}$？**
+
+這並非單純的數值穩定微調，而是為了防止**梯度消失（Gradient Vanishing）**。
+
+### 假設與推導
+
+設向量 $q = [q_1, \dots, q_{d_k}]$ 與 $k = [k_1, \dots, k_{d_k}]$ 中的各分量均為獨立同分佈（i.i.d.）的隨機變數，其均值為 0，變異數（Variance）為 1：
+
+$$
+\mathbb{E}[q_i] = 0, \quad \text{Var}(q_i) = 1
+$$
+$$
+\mathbb{E}[k_i] = 0, \quad \text{Var}(k_i) = 1
+$$
+
+兩者的點積為：
+
+$$
+z = q \cdot k = \sum_{i=1}^{d_k} q_i k_i
+$$
+
+我們來計算點積 $z$ 的期望值與變異數：
+
+1. **期望值**：
+   $$
+   \mathbb{E}[z] = \sum_{i=1}^{d_k} \mathbb{E}[q_i k_i] = \sum_{i=1}^{d_k} \mathbb{E}[q_i]\mathbb{E}[k_i] = 0
+   $$
+
+2. **變異數**：
+   由於獨立性，兩獨立變數乘積的變異數為：
+   $$
+   \text{Var}(q_i k_i) = \mathbb{E}[(q_i k_i)^2] - (\mathbb{E}[q_i k_i])^2 = \mathbb{E}[q_i^2]\mathbb{E}[k_i^2] - 0 = (1)(1) = 1
+   $$
+   因此求和後的總變異數為：
+   $$
+   \text{Var}(z) = \text{Var}\left(\sum_{i=1}^{d_k} q_i k_i\right) = \sum_{i=1}^{d_k} \text{Var}(q_i k_i) = d_k
+   $$
+
+<Callout type="intuition" title="關鍵直覺：維度越大，方差膨脹越劇烈">
+當嵌入維度 $d_k$ 很大時（例如當代 LLM 的 $d_k = 64$ 或 $128$），未縮放的點積結果變異數高達 $d_k$，這代表點積值的絕對值可能會非常大（$\pm \sqrt{d_k}$ 甚至更大）。
+</Callout>
+
+### 梯度消失的連鎖反應
+
+當輸入給 $\text{softmax}(z)$ 的數值極大時，Softmax 函數會被推向飽和區（Saturation Region）：
+- 最大的數值對應的概率逼近 $1$
+- 其餘數值對應的概率逼近 $0$
+
+回顧 Softmax 函數對輸入 $z_i$ 的偏導數：
+
+$$
+\frac{\partial \text{softmax}(z)_i}{\partial z_j} = \text{softmax}(z)_i (\delta_{ij} - \text{softmax}(z)_j)
+$$
+
+當某個分量逼近 $1$ 其餘逼近 $0$ 時，導函數中的項必然趨近於 $0$，導致反向傳播時的梯度幾乎完全歸零！
+
+**解決方案**：
+將點積除以 $\sqrt{d_k}$ 進行標準化：
+
+$$
+\text{Var}\left(\frac{q \cdot k}{\sqrt{d_k}}\right) = \frac{1}{d_k} \text{Var}(q \cdot k) = \frac{1}{d_k} \cdot d_k = 1
+$$
+
+這確保了無論特徵維度 $d_k$ 設定得多大，輸入給 Softmax 的激活值分佈變異數始終恆定維持在 $1$，從而穩定反向傳播的梯度。
+
+---
+
+## 3. 多頭注意力 (Multi-Head Attention)
+
+如果單純只用單一組 $(Q, K, V)$，模型只能專注於單一語意焦點（例如只關注「語法修飾關係」或只關注「指代關係」）。
+
+Multi-Head Attention 透過將通道投影至 $h$ 個不同的低維子空間，允許模型**同時在不同位置關注不同語意面向**：
+
+$$
+\text{MultiHead}(Q, K, V) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W^O
+$$
+$$
+\text{where} \quad \text{head}_i = \text{Attention}(Q W_i^Q, K W_i^K, V W_i^V)
+$$
+
+其中可學習參數矩陣的維度通常為：
+- $W_i^Q \in \mathbb{R}^{d_{\text{model}} \times d_k}$
+- $W_i^K \in \mathbb{R}^{d_{\text{model}} \times d_k}$
+- $W_i^V \in \mathbb{R}^{d_{\text{model}} \times d_v}$
+- $W^O \in \mathbb{R}^{h d_v \times d_{\text{model}}}$
+
+一般設定 $d_k = d_v = d_{\text{model}} / h$，因此多頭注意力的總參數量與運算複雜度，其實與單頭的全維度注意力完全相同！
+
+---
+
+## 4. 完整的 Encoder 區塊與現代 Pre-LN 演進
+
+在原始 2017 年的論文中，採用的是 **Post-LN** 架構：
+$$\text{Output} = \text{LayerNorm}(x + \text{SubLayer}(x))$$
+
+然而在深度堆疊（如 20 層以上）時，Post-LN 的殘差流梯度容易不穩定，訓練往往需要極其小心調節 Warmup。現代大語言模型（如 LLaMA, Mistral, GPT 系列）普遍轉向 **Pre-LN**（甚至更進階的 RMSNorm）：
+
+$$\text{Output} = x + \text{SubLayer}(\text{LayerNorm}(x))$$
+
+<Figure
+  src="/ml-expert/images/posts/transformer/transformer-encoder-block.svg"
+  alt="Modern Transformer Encoder Block with Pre-LN"
+  figureNumber="2"
+  caption="現代 Transformer Encoder 區塊結構（採用 Pre-LN 配置）。殘差連線（Residual Stream）暢通無阻，為極深層神經網路的穩定反向傳播提供強大保證。"
+/>
+
+---
+
+## 5. PyTorch 簡潔實作
+
+以下為兼具效能與可讀性的 Multi-Head Attention 實作，包含矩陣重塑（Reshape）與張量維度轉置技巧：
+
+```python
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ScaledDotProductAttention(nn.Module):
+    def __init__(self, dropout: float = 0.0):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        q: torch.Tensor,       # [batch_size, n_heads, seq_len_q, d_k]
+        k: torch.Tensor,       # [batch_size, n_heads, seq_len_k, d_k]
+        v: torch.Tensor,       # [batch_size, n_heads, seq_len_v, d_v]
+        mask: torch.Tensor = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        d_k = q.size(-1)
+        
+        # 1. 矩陣點積並縮放: scores shape [B, H, S_q, S_k]
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)
+
+        # 2. 遮罩處理 (Masking)
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+
+        # 3. Softmax 歸一化
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+
+        # 4. 與 Value 矩陣相乘
+        output = torch.matmul(attn_weights, v)
+        return output, attn_weights
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % n_heads == 0, "d_model 必須能被 n_heads 整除"
+        
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads
+
+        # 一次性投影以獲得最佳矩陣計算效能
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model, bias=False)
+
+        self.attention = ScaledDotProductAttention(dropout=dropout)
+
+    def forward(self, q, k, v, mask=None):
+        batch_size = q.size(0)
+
+        # 1. 線性映射並將維度切分為多頭: [B, S, D] -> [B, H, S, d_k]
+        q = self.w_q(q).view(batch_size, -1, self.n_heads, self.d_k).transpose(1, 2)
+        k = self.w_k(k).view(batch_size, -1, self.n_heads, self.d_k).transpose(1, 2)
+        v = self.w_v(v).view(batch_size, -1, self.n_heads, self.d_k).transpose(1, 2)
+
+        # 2. 計算注意力
+        out, weights = self.attention(q, k, v, mask=mask)
+
+        # 3. 拼接所有頭並投射回原始維度
+        # [B, H, S, d_k] -> [B, S, H * d_k] -> [B, S, d_model]
+        out = out.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
+        return self.w_o(out)
+```
+
+---
+
+## 結語
+
+Transformer 的優雅之處在於：**以單純的線性代數與幾何投影，替換掉了繁複的時間遞迴**。
+
+透過 $\sqrt{d_k}$ 的精妙縮放，它守護了 Softmax 的梯度流；透過多頭投射，它構建了豐富的多語意特徵空間。在下一篇文章中，我們將進一步剖析現代大模型為解決 $O(N^2)$ 記憶體瓶頸所引入的革命性技術——**FlashAttention（GPU SRAM Tiling 與線上 Softmax）**。

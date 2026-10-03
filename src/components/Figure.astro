@@ -1,0 +1,27 @@
+---
+interface Props {
+  src: string;
+  alt: string;
+  caption?: string;
+  figureNumber?: string | number;
+}
+
+const { src, alt, caption, figureNumber } = Astro.props;
+---
+
+<figure class="my-8 flex flex-col items-center">
+  <div class="w-full overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-2 shadow-sm transition hover:shadow-md">
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      class="mx-auto h-auto max-h-[550px] w-full rounded-lg object-contain"
+    />
+  </div>
+  {caption && (
+    <figcaption class="mt-3 text-center text-sm leading-relaxed text-[var(--text-muted)]">
+      {figureNumber && <span class="font-semibold text-[var(--text-secondary)]">Figure {figureNumber}: </span>}
+      {caption}
+    </figcaption>
+  )}
+</figure>
